@@ -1,0 +1,463 @@
+---
+title: "FinalProj(clean)"
+author: "Erica Chio"
+date: "12/10/2019"
+output: html_document
+---
+
+```{r message=FALSE, warning=FALSE}
+library(tibble)
+library(tidyverse)
+library(plyr)
+library(anchors)
+library(ggplot2)
+library(dplyr)
+
+library(ggfortify)
+library(fastICA)
+library(cluster)    # clustering algorithms
+# install.packages("factoextra")
+# install.packages("NbClust")
+library(factoextra)
+library(NbClust)
+library(data.table)
+
+library(tree)
+library(MASS)
+library(gbm)
+
+library(randomForest)
+library(caret)
+library(tree)
+library(rpart)
+library(glmnet)
+
+library(ROCR)
+library(pROC)
+
+# library(mlr)
+library(DMwR)
+```
+
+## load dataset and cleaning it up
+
+```{r}
+#load the dataset
+data <- read.csv("kag_risk_factors_cervical_cancer.csv", header = T, stringsAsFactors = FALSE)
+```
+
+
+```{r}
+#get rid of ? as NA
+data[data == "?"] <- NA
+# head(data)
+```
+
+```{r message=FALSE, warning=FALSE}
+#remove all the na values 
+na_ALL <- data %>%
+  summarise_all(funs(sum(is.na(.))))
+
+transpose_na_all <- transpose(na_ALL)
+# transpose_na_all
+```
+
+```{r}
+#check that there are still observations if removed all na values
+rownames(transpose_na_all) <- colnames(na_ALL)
+# transpose_na_all
+```
+
+```{r}
+#remove all na values
+data <- data[!is.na(data$STDs),]
+data <- data[!is.na(data$Hormonal.Contraceptives),]
+data <- data[!is.na(data$Number.of.sexual.partners),]
+data <- data[!is.na(data$Smokes),]
+data <- data[!is.na(data$IUD),]
+data <- data[!is.na(data$Num.of.pregnancies),]
+data <- data[!is.na(data$First.sexual.intercourse),]
+# sum(data$Dx.Cancer[data$Dx.Cancer == "1"])
+# data %>%
+#   summarise_all(funs(sum(is.na(.))))
+
+```
+
+```{r}
+data[is.na(data)] <- 0
+head(data)
+```
+## background graphs to see how data is
+
+```{r}
+#plotting HPV Diagnosis to cancer
+data$Dx.HPV <- factor(data$Dx.HPV, labels=c("no","yes"))
+# unique(data$Dx.HPV) 
+ggplot(data, aes(x=Dx.Cancer, fill = Dx.HPV)) + geom_bar() + labs(title="Patients Diagonsed With Cancer")
+```
+
+```{r}
+#checking how many patients test positive for cancer and how many tests taken to determine diagnosis
+# unique(data$DxCancer)
+data$Dx.Cancer <- factor(data$Dx.Cancer, labels=c("no","yes"))
+data$tests <- data$Hinselmann + data$Schiller + data$Citology + data$Biopsy
+ggplot(data, aes(x=tests, fill = Dx.Cancer)) + geom_bar(position="fill") + labs(title="Number of tests tested positive and Patients Diagonsed with Cancer")
+
+# head(data)
+```
+
+
+## changing from splitting classes into cancer vs cancer free to tests vs test free
+
+```{r}
+#change colnames
+colnames(data) <- c("Age", "NumSexualPartners", "AgeFirstSexualIntercourse", "NumPregnancy", "Smokes", "SmokeYears", "SmokePacksPerYear", "HormonalContraceptives", "HormonalContraceptivesYears", "IUD", "IUDYears", "STDs", "NumSTDs", "STDsCondylomatosis", "STDsCervicalCondylomatosis", "STDsVaginalCondylomatosis", "STDsVulvoPerinealCondylomatosis", "STDsSyphilis", "STDsPelvicInflammatoryDisease", "STDsGenitalHerpes", "STDsMolluscumContagiosum", "STDsAIDS", "STDsHIV", "STDsHepatitisB", "STDsHPV", "STDsNumberOfDiagnosis", "STDsTimeSinceFirstDiagnosis", "STDsTimeSinceLastDiagnosis", "DxCancer", "DxCIN", "DxHPV", "Dx", "Hinselmann", "Schiller", "Citology", "Biopsy", "tests")
+```
+
+```{r}
+#deciding to check for risk
+
+#will split the data from cancer vs no cancer to tests taken vs no tests taken
+data$tests[data$tests >= "0"]
+head(data)
+```
+
+```{r}
+#making class
+data$High = factor(ifelse(data$tests<=0, "No", "Yes"))
+```
+
+## class imbalance, will use SMOTE to over sample the smaller class
+
+```{r}
+head(data)
+# table(data$tests)
+str(data)
+```
+
+```{r}
+data$NumSexualPartners <- as.numeric(as.character(data$NumSexualPartners))
+data$AgeFirstSexualIntercourse <- as.numeric(as.character(data$AgeFirstSexualIntercourse))
+data$NumPregnancy <- as.numeric(as.character(data$NumPregnancy))
+data$Smokes <- as.numeric(as.character(data$Smokes))
+data$SmokeYears <- as.numeric(as.character(data$SmokeYears))
+data$SmokePacksPerYear <- as.numeric(as.character(data$SmokePacksPerYear))
+data$HormonalContraceptives <- as.numeric(as.character(data$HormonalContraceptives))
+data$HormonalContraceptivesYears <- as.numeric(as.character(data$HormonalContraceptivesYears))
+data$IUD <- as.numeric(as.character(data$IUD))
+data$IUDYears <- as.numeric(as.character(data$IUDYears))
+
+data$STDs <- as.numeric(as.character(data$STDs))
+data$NumSTDs <- as.numeric(as.character(data$NumSTDs))
+data$STDsCondylomatosis <- as.numeric(as.character(data$STDsCondylomatosis))
+data$STDsCervicalCondylomatosis <- as.numeric(as.character(data$STDsCervicalCondylomatosis))
+data$STDsVaginalCondylomatosis <- as.numeric(as.character(data$STDsVaginalCondylomatosis))
+data$STDsVulvoPerinealCondylomatosis <- as.numeric(as.character(data$STDsVulvoPerinealCondylomatosis))
+data$STDsSyphilis <- as.numeric(as.character(data$STDsSyphilis))
+
+data$STDsPelvicInflammatoryDisease <- as.numeric(as.character(data$STDsPelvicInflammatoryDisease))
+data$STDsGenitalHerpes <- as.numeric(as.character(data$STDsGenitalHerpes))
+data$STDsMolluscumContagiosum <- as.numeric(as.character(data$STDsMolluscumContagiosum))
+data$STDsAIDS <- as.numeric(as.character(data$STDsAIDS))
+data$STDsHIV <- as.numeric(as.character(data$STDsHIV))
+data$STDsHepatitisB <- as.numeric(as.character(data$STDsHepatitisB))
+data$STDsHPV <- as.numeric(as.character(data$STDsHPV))
+data$STDsNumberOfDiagnosis <- as.numeric(as.character(data$STDsNumberOfDiagnosis))
+data$STDsTimeSinceFirstDiagnosis <- as.numeric(as.character(data$STDsTimeSinceFirstDiagnosis))
+data$STDsTimeSinceLastDiagnosis <- as.numeric(as.character(data$STDsTimeSinceLastDiagnosis))
+# data$STDsCondylomatosis <- as.numeric(as.character(data$STDsCondylomatosis))
+# data$STDsCervicalCondylomatosis <- as.numeric(as.character(data$STDsCervicalCondylomatosis))
+# data$STDsVaginalCondylomatosis <- as.numeric(as.character(data$STDsVaginalCondylomatosis))
+# data$STDsVulvoPerinealCondylomatosis <- as.numeric(as.character(data$STDsVulvoPerinealCondylomatosis))
+# data$STDsSyphilis <- as.numeric(as.character(data$STDsSyphilis))
+# temp <- data[,c(1:20,38)]
+str(data)
+```
+
+```{r}
+newData <- SMOTE(High ~ ., data, perc.over = 600,perc.under=100)
+table(newData$High)
+
+head(newData)
+```
+
+```{r}
+#switching the rows around so it is not evenly split
+data2 <- newData[sample(nrow(newData)),]
+# newData
+```
+
+```{r}
+newData <- data2
+head(newData)
+```
+
+## Feature Selection (rfe)
+
+```{r}
+
+data_num = transform(newData,Age = as.numeric(Age), 
+                         NumSexualPartners = as.numeric(NumSexualPartners),
+                         AgeFirstSexualIntercourse = as.numeric(AgeFirstSexualIntercourse),
+                         NumPregnancy = as.numeric(NumPregnancy), 
+                         Smokes = as.numeric(Smokes),
+                         SmokeYears = as.numeric(SmokeYears),
+                         SmokePacksPerYear = as.numeric(SmokePacksPerYear), 
+                         HormonalContraceptives = as.numeric(HormonalContraceptives), 
+                         HormonalContraceptivesYears = as.numeric(HormonalContraceptivesYears),
+                         IUD = as.numeric(IUD),
+ IUDYears = as.numeric(IUDYears), 
+                         STDs = as.numeric(STDs),
+                         NumSTDs = as.numeric(NumSTDs),
+                         STDsCondylomatosis = as.numeric(STDsCondylomatosis), 
+                         STDsCervicalCondylomatosis = as.numeric(STDsCervicalCondylomatosis),
+                         STDsVaginalCondylomatosis = as.numeric(STDsVaginalCondylomatosis),
+                         STDsVulvoPerinealCondylomatosis = as.numeric(STDsVulvoPerinealCondylomatosis), 
+                         STDsSyphilis = as.numeric(STDsSyphilis), 
+                         STDsPelvicInflammatoryDisease = as.numeric(STDsPelvicInflammatoryDisease),
+                         STDsGenitalHerpes = as.numeric(STDsGenitalHerpes),
+ STDsMolluscumContagiosum = as.numeric(STDsMolluscumContagiosum),
+                         STDsAIDS = as.numeric(STDsAIDS), 
+                         STDsHIV = as.numeric(STDsHIV),
+                         STDsHepatitisB = as.numeric(STDsHepatitisB),
+                         STDsHPV = as.numeric(STDsHPV), 
+                         STDsNumberOfDiagnosis = as.numeric(STDsNumberOfDiagnosis), 
+                         STDsTimeSinceFirstDiagnosis = as.numeric(STDsTimeSinceFirstDiagnosis),
+                         STDsTimeSinceLastDiagnosis = as.numeric(STDsTimeSinceLastDiagnosis))
+
+
+head(data_num)
+```
+
+
+```{r message=FALSE, warning=FALSE}
+set.seed(123)
+# #takes a long time to run -- commented out
+
+# #define the control
+control = rfeControl(functions = caretFuncs, number = 2)
+
+# run the RFE algorithm
+results = rfe(data_num[,1:28], data_num[,38], sizes = c(5,7), rfeControl = control, method = "svmRadial")
+
+#sizes (2,5,9)/(2,5,7) can try different numbers
+
+results
+results$variables
+
+#visualized
+plot(results, type=c('g','o'))
+
+#list chosen features
+predictors(results)
+```
+## logistic regression
+
+```{r}
+#split into training and test set 
+train_size <- floor(0.75 * nrow(newData))
+set.seed(123)
+train_pos <- sample(seq_len(nrow(newData)), size = train_size)
+train_classifier <- newData[train_pos,]
+test_classifier <- newData[-train_pos,]
+
+
+dim(train_classifier)
+dim(test_classifier)
+#only look at two classes 
+train_classifier_log <- train_classifier[c(which(train_classifier$High == "No"),
+                                           which(train_classifier$High == "Yes")),]
+test_classifier_log <- test_classifier[c(which(test_classifier$High == "No"), 
+                                         which(test_classifier$High == "Yes")),]
+
+train_classifier_log$Class <- factor(train_classifier_log$High)
+test_classifier_log$Class <- factor(test_classifier_log$High)
+
+train_classifier_log  <- newData[sample(nrow(train_classifier_log)),]
+test_classifier_log  <- newData[sample(nrow(test_classifier_log)),]
+
+ctrl <- trainControl(method = "repeatedcv", repeats = 15,classProbs = T,
+                     savePredictions = T)
+
+# test_classifier_log ## randomize?? 
+
+# train_classifier_log
+```
+
+```{r}
+# logistic_regression <- train(High ~ . -(tests + High + Hinselmann + Schiller + Citology + Biopsy + DxCancer + DxCIN + DxHPV + Dx) , data = train_classifier_log, method = "glm", family= "binomial", trControl = ctrl)
+
+logistic_regression <- train(High ~ SmokePacksPerYear + SmokeYears + Age + Smokes + HormonalContraceptivesYears , data = train_classifier_log, method = "glm", family= "binomial", trControl = ctrl)
+
+
+logistic_regression
+
+plot(x = roc(predictor = logistic_regression$pred$Yes,
+             response = logistic_regression$pred$obs)$specificities, 
+     y = roc(predictor = logistic_regression$pred$Yes, 
+             response = logistic_regression$pred$obs)$sensitivities,
+     col= "blue", xlim = c(1, 0), type ="l", ylab = "Sensitivity",
+     xlab = "Specificity")
+legend("bottomright", legend = paste("No(no tests) v Yes(high tests) --", 
+                                     roc(predictor = logistic_regression$pred$Yes,
+                                         response = logistic_regression$pred$obs)$auc
+, sep = ""), col = c("blue"), fill = c("blue"))
+
+logistic_regression_predict_class <- predict(logistic_regression,
+                                             newdata = test_classifier_log)
+
+#confusion matrix
+logistic_confusion <- confusionMatrix(logistic_regression_predict_class, 
+                reference = test_classifier_log$High)
+logistic_confusion
+fourfoldplot(logistic_confusion$table, main = "Confusion Matrix for Logistic Regression (top 5 features)")
+```
+```{r message=FALSE, warning=FALSE}
+logistic_regressionAll <- train(High ~ . -(tests + High + Hinselmann + Schiller + Citology + Biopsy + DxCancer + DxCIN + DxHPV + Dx) , data = train_classifier_log, method = "glm", family= "binomial", trControl = ctrl)
+
+# logistic_regression <- train(High ~ STDsNumberOfDiagnosis+ NumSTDs+ STDs+ STDsTimeSinceFirstDiagnosis+ STDsTimeSinceLastDiagnosis , data = train_classifier_log, method = "glm", family= "binomial", trControl = ctrl)
+
+
+logistic_regressionAll
+
+
+logistic_regression_predict_class_ALL <- predict(logistic_regressionAll,
+                                             newdata = test_classifier_log)
+
+
+
+plot(x = roc(predictor = logistic_regressionAll$pred$Yes,
+             response = logistic_regressionAll$pred$obs)$specificities, 
+     y = roc(predictor = logistic_regressionAll$pred$Yes, 
+             response = logistic_regressionAll$pred$obs)$sensitivities,
+     col= "blue", xlim = c(1, 0), type ="l", ylab = "Sensitivity",
+     xlab = "Specificity")
+legend("bottomright", legend = paste("No(no tests) v Yes(high tests) --", 
+                                     roc(predictor = logistic_regressionAll$pred$Yes,
+                                         response = logistic_regressionAll$pred$obs)$auc
+, sep = ""), col = c("blue"), fill = c("blue"))
+
+
+#confusion matrix
+logistic_confusion_ALL <- confusionMatrix(logistic_regression_predict_class_ALL, 
+                reference = test_classifier_log$High)
+logistic_confusion_ALL
+fourfoldplot(logistic_confusion_ALL$table, main = "Confusion Matrix for Logistic Regression (ALL features)")
+```
+
+
+
+## SVM
+
+```{r}
+head(data_num)
+```
+```{r}
+train_size = floor(0.75 * nrow(data_num))
+train_pos <- sample(seq_len(nrow(data_num)), size = train_size)
+
+train_classification <- data_num[train_pos, ]
+test_classification <- data_num[-train_pos, ]
+
+table(data_num$High)
+```
+
+```{r message=FALSE, warning=FALSE}
+set.seed(1112)
+control = trainControl(method = "repeatedcv", repeats = 5, classProbs = T, savePredictions = T)
+
+svm = train(High ~ . -(tests + High + Hinselmann + Schiller + Citology + Biopsy + DxCancer + DxCIN + DxHPV + Dx),  data = train_classification, method = "svmLinear", tuneLength = 10, trControl = control)
+svm
+```
+
+
+```{r}
+roc(predictor = svm$pred$Yes, response = svm$pred$obs)$auc
+
+plot(x = roc(predictor = svm$pred$Yes, response = svm$pred$obs)$specificities, y = roc(predictor = svm$pred$Yes, response = svm$pred$obs)$sensitivities, col= "blue", xlim = c(1, 0), type ="l", ylab = "Sensitivity", xlab = "Specificity")
+
+```
+
+```{r}
+svm_test = predict(svm, newdata = test_classification)
+svm_confusion <- confusionMatrix(svm_test, reference = test_classification$High)
+svm_confusion
+fourfoldplot(svm_confusion$table, main = "Confusion Matrix for SVM (ALL features)")
+
+```
+
+
+
+
+
+## classification tree
+
+```{r Classification Tree}
+#set seed to make results reproducible 
+set.seed(29)
+
+#split data into train and test subset (250 and 150 respectively)
+train = sample(1:nrow(newData), 838)
+
+#Fit train subset of data to model 
+tree.newData = tree(High~ . -(tests + High + Hinselmann + Schiller + Citology + Biopsy + DxCancer + DxCIN + DxHPV + Dx), newData, subset=train)
+summary(tree.newData)
+
+#Visualize tree
+plot(tree.newData)
+text(tree.newData, pretty=0,all=TRUE, cex=.7)
+
+
+#each of the terminal nodes are labeled Yes or No. The variables and the value of the splitting choice are shown at each terminal node. 
+
+#Use model on test set, predict class labels 
+tree.pred = predict(tree.newData, newData[-train,], type="class")
+
+# #Misclassification table to evaluate error 
+tree_confusion <- with(newData[-train,], table(tree.pred, High))
+
+cm3 <- confusionMatrix(tree_confusion)
+cm3
+fourfoldplot(cm3$table, main = "Confusion Matrix for Random Forest")
+
+
+```
+
+```{r Pruning}
+#cross-validation to prune the tree using cv.tree
+cv.newData = cv.tree(tree.newData, FUN = prune.misclass)
+
+#Sizes of the trees as they were pruned back, the deviances as the pruning proceeded, and cost complexity parameter used in the process.
+cv.newData
+
+#Visualize 
+plot(cv.newData)
+
+#Prune tree to a size of 12 
+prune.newData = prune.misclass(tree.newData, best = 6)
+
+#Visualize tree 
+plot(prune.newData)
+text(tree.newData, pretty=0,all=TRUE, cex=.7)
+
+#Evaluate on test set 
+tree.pred = predict(prune.newData, newData[-train,], type="class")
+
+#Misclassification 
+
+tree_confusion2 <- with(newData[-train,], table(tree.pred, High))
+
+cm4 <- confusionMatrix(tree_confusion2)
+cm4
+fourfoldplot(cm4$table, main = "Confusion Matrix for Random Forest - Smaller Forest")
+
+
+##pruning did not increase misclassification error by too much and resulted in a simpler tree!!
+```
+
+
+
+
+
+
+
